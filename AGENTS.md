@@ -4,7 +4,7 @@
 
 - 当前分支 `openwrt-25.12-6.12`，基于 <https://github.com/chasey-dev/immortalwrt-mt798x-rebase> 的 `25.12` 分支（ImmortalWrt 25.12 + MTK OpenWrt feeds）。
 - 旧树保留在分支 `openwrt-24.10-6.6`，工作树 `/home/potter-lgy/wt-2410`，仅作对照与回退，不要删除或直接在上面开发。
-- 内核 6.12.117（版本/hash 文件 `target/linux/generic/kernel-6.12`，补丁目录 `target/linux/generic/{backport,hack,pending}-6.12` + `target/linux/mediatek/patches-6.12`），U-Boot 2025.10（`package/boot/uboot-mediatek`）。11-14 从 6.12.112 跨 5 个稳定版升级到 117：OpenWrt 主线已在 2026-10-18 移除 6.12 支持、chasey 基座也停在 112，没有现成 bump commit，补丁按 `QUILT=1 target/linux/prepare` + `quilt push/refresh` 在真实 117 树上重导；删除 8 个上游已合入或 feed 已移除的补丁、同步 MTK feed 的通用 SRAM 分配器方案（`999-backport-07/08` + 新版 `999-eth-22`）、refresh 6 个语义冲突补丁。判据：`patch -f -p1` 正常路径下 1069/1069 补丁全过，另有全量 `BUILD_EXIT=0`。
+- 内核 6.12.118（版本/hash 文件 `target/linux/generic/kernel-6.12`，补丁目录 `target/linux/generic/{backport,hack,pending}-6.12` + `target/linux/mediatek/patches-6.12`），U-Boot 2025.10（`package/boot/uboot-mediatek`）。11-14 从 6.12.112 跨 5 个稳定版升级到 117：OpenWrt 主线已在 2026-10-18 移除 6.12 支持、chasey 基座也停在 112，没有现成 bump commit，补丁按 `QUILT=1 target/linux/prepare` + `quilt push/refresh` 在真实 117 树上重导；删除 8 个上游已合入或 feed 已移除的补丁、同步 MTK feed 的通用 SRAM 分配器方案（`999-backport-07/08` + 新版 `999-eth-22`）、refresh 6 个语义冲突补丁。11-21 又 bump 到 6.12.118（680 提交/710 文件，与自有补丁集交集 26 文件）：唯一真冲突是上游 `b5b8c818`（pppoe: delete session hash entries by pointer match，安全修复）与 `623-v6.18-pppoe-remove-rwlock-usage` 语义重叠，见「内核与补丁」节；118 未触碰 `drivers/net/ethernet/mediatek/` 与 mt798x dts（mt76 变更与本树无关，本树无 mt76）。判据：`patch -f -p1` 正常路径下 1069/1069 补丁全过，另有全量 `BUILD_EXIT=0`。
 - 本仓库自有资产（自定义包、profile/dts、补丁、种子、feed 补丁、板级适配）基本都已迁到 25.12；目录名里的 `6.6` 是历史名称，不代表内核版本。
   - 迁移核对不能只比"包目录在不在"，要比**包目录里的 `Package/*` 定义**。25.12 的 `package/mtk/applications/mtwifi-cfg/Makefile` 是上游 MTK 版（`PKG_RELEASE:=1`，只有 `Package/mtwifi-cfg`），本仓库在 24.10 上给它加的两个提交——`cf57087f7d mtwifi-cfg: fix wapp installation`（把 wapp 塞进 mtwifi-cfg）和 `270c4c824d mtwifi-cfg: separate mtwifi-wapp from mtwifi-cfg`（拆成 `Package/mtwifi-wapp` 子包）——随基座替换一起丢了，`files/wapp/` 也不在 25.12 树里。现在以独立包 `package/mtk/applications/mtwifi-wapp` 迁回（见"无线栈"节）。
 
@@ -47,6 +47,8 @@
 - 内核补丁目录是 `patches-6.12`。当前只有两条自有迁移补丁：`999-eth-57-mtk_eth_soc-add-mdio-reset-delay.patch`、`9999-12-mediatek-usb-net-cellular-modem-quirks.patch`；其余 24.10 时代补丁未迁（25.12 的 MTK feeds 已覆盖大部分）。
 - `target/linux/mediatek/patches-6.12` 的补丁不要照抄 24.10 版本，锚点会偏移，按 6.12 重新导出。
 - 跨 6.12 稳定版升级（如 112→117）没有上游 bump commit 可抄时，按「MTK feed 已合入/已删除的补丁先对齐 → `QUILT=1 target/linux/prepare` 建树 → `quilt push -a -f` 逐个解 `.rej` → `quilt refresh -p ab --no-index --no-timestamps` 导出 → 落盘 → 最后用**无 QUILT 的 `patch -f -p1` 全序重放**复核」推进；不能用「单补丁 dry-run」判失败（补丁系列互相依赖会连锁误报），也不能只凭 `-f` 强制 push 成功就算通过。`feeds/mtk_openwrt_feed` 的本树快照停在 10-30 `c2b24b4`，feed `main` 的 11-02 `5ec35e8c`（删 `999-eth-07`、refresh eth-09/91）、11-11 `3f66af25`（refresh ppe-15）、10-05 `6bcd20b5`（通用 SRAM 分配器）是本次重导的依据。
+- 干净树重放前必须先复刻 prepare 的 files/ 覆盖（`target/linux/generic/files`、`target/linux/mediatek/files`、`target/linux/mediatek/files-6.12` 三段 `cp -fpR .../. .`）再跑 `patch-kernel.sh` 四段，否则平台 dts 补丁报 `can't find file to patch` 假失败——如 `863-arm64-dts-mt7986-add-sound-wm8960.patch` 打的 `mt7986a-rfb-spim-nand.dts` 就来自 `files-6.12` 而不在 tarball 里（117→118 时实测踩过）。
+- 6.12.118 的上游 `b5b8c818`（pppoe 按 `pppox_sock` 指针匹配删除哈希条目，防 `__set_item` 返回 `-EALREADY` 后误删别人会话）与自有 `623-v6.18-pppoe-remove-rwlock-usage` 在 `__delete_item`/`delete_item` 上语义重叠，已手合并：`__delete_item(pn, po)` 保留 623 的 RCU 原语（`__rcu **src`、`rcu_dereference_protected`、`rcu_assign_pointer`）、`delete_item` 用 `spin_lock`，与主线 v6.18+ 合并形态一致；`const struct pppox_sock *po` 按 6.12.118 stable backport 的做法去掉（6.12 的 `hash_item()` 签名不认 const）。623 已按此 refresh 落盘，hunk 行号随 118 平移。
 - `package/system/rpcd/Makefile` 的 `BuildPlugin` 仍保留 `DEPENDS+=+rpcd $(2)`（上游写裸 `rpcd`，会引入 kconfig 递归依赖，改 select 后消失）。
 
 ## U-Boot 2025.10 适配（自建目标必看）
@@ -88,6 +90,7 @@ make -j6 world V=s > .buildlogs/full.log 2>&1; echo "BUILD_EXIT=$?" >> .buildlog
 
 25.12 实测基线（2026-11-08，`mt7981-ax3000.config`，96 设备）：`make -j6 world` 约 55 分钟、`BUILD_EXIT=0`；产物含 `kmod-mt_wifi-6.12.112.7.6.7.3-r1.apk`、`kmod-warp`、`kmod-conninfra`，rootfs 内 `mt_wifi.ko` / `conninfra.ko` / `mtk_warp*.ko` 齐全，`iwinfo-ucode` / `mtwifi-cfg-ucode` / `luci-app-mtwifi-cfg` 均已安装。
 6.12.117 实测基线（2026-11-14，主线 `.config`，92 设备）：全量 `make -j6 world BUILD_EXIT=0`、0 致命行；`bin/targets/mediatek/filogic/` 产出 135 个 `6.12.117` apk（含 `kmod-mt_wifi-6.12.117.7.6.7.3-r1.apk`、`kmod-warp`、`kmod-conninfra`）与 105 个 sysupgrade 镜像，rootfs 的 `lib/modules/6.12.117/` 内 `mt_wifi.ko` / `mtk_warp.ko` / `mtk_warp_proxy.ko` 齐全。另 46 个 `6.12.112` apk 是旧构建残留（未清 `bin/`），不影响。
+6.12.118 实测基线（2026-11-21，主线 `.config`，92 设备）：全量 `make -j6 world BUILD_EXIT=0`、0 致命行；135 个 `6.12.118` apk（含 `kmod-mt_wifi-6.12.118.7.6.7.3-r1.apk`、`kmod-warp`、`kmod-conninfra`）与 105 个 sysupgrade 镜像，rootfs 的 `lib/modules/6.12.118/` 内 `mt_wifi.ko` / `mtk_warp.ko` / `mtk_warp_proxy.ko` / `conninfra.ko` 齐全。117 的 kmod apk 已被本次构建索引清理，`bin/` 里剩的 `6.12.112` kmod/ipk 是更早的旧残留（已知噪声，要干净目录需清空 `bin/`）。
 
 ## 已知噪声与坑
 
